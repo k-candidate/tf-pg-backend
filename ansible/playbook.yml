@@ -1,0 +1,127 @@
+---
+- name: PostgreSQL as Terraform backend
+  hosts: all
+  become: true
+  vars:
+    db_name: "{{ db_name }}"
+    db_user: "{{ db_user }}"
+    db_password: "{{ db_password }}"
+
+  tasks:
+    - name: Show Ansible version. For troubleshooting
+      debug:
+        msg: "Ansible version is  {{ ansible_version.full }}"
+
+    - name: Check if this playbook has rebooted the machine before
+      ansible.builtin.stat:
+        path: /var/tmp/ansible_rebooted_this_machine_before.txt
+      register: reboot_file
+
+    - name: Reboot on the playbook's first run to start fresh after the changes made by user data
+      ansible.builtin.reboot:
+        post_reboot_delay: 10
+        connect_timeout: 120
+      when: not reboot_file.stat.exists
+      register: reboot_result
+
+    - name: Create file to indicate reboot happened on the playbook's first run
+      ansible.builtin.file:
+        path: /var/tmp/ansible_rebooted_this_machine_before.txt
+        state: touch
+      when:
+        - reboot_file.stat.exists == false
+        - reboot_result is succeeded
+
+    - name: Start and enable postgresql service
+      ansible.builtin.systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create database
+      become_user: postgres
+      become: true
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_db:
+        name: terraform_backend
+        state: present
+
+    - name: Create PostgreSQL user for Terraform
+      become: true
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        role_attr_flags: LOGIN
+        state: present
+    
+    - name: Grant privileges to Terraform user on the db
+      become: true
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_privs:
+        type: database
+        database: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        privs: ALL
+
+    - name: Allow remote connections to PostgreSQL
+      ansible.builtin.lineinfile:
+        path: /etc/postgresql/17/main/postgresql.conf
+        regexp: '^#?listen_addresses\s*='
+        line: "listen_addresses = '*'"
+      notify: Restart PostgreSQL
+
+    - name: Add client authentication rule for Terraform user
+      ansible.builtin.lineinfile:
+        path: /etc/postgresql/17/main/pg_hba.conf
+        line: "host    {{ db_name }}    {{ db_user }}    0.0.0.0/0    md5"
+      notify: Restart PostgreSQL
+
+    - name: Grant usage and create on schema public to Terraform user
+      become: true
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_privs:
+        type: schema
+        database: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        privs: USAGE,CREATE
+        objs: public
+
+    - name: Grant all privileges on all tables in schema public to Terraform user
+      become: true
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_privs:
+        type: table
+        database: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        privs: ALL
+        objs: ALL_IN_SCHEMA
+        schema: public
+
+    - name: Grant all privileges on all sequences in schema public to Terraform user
+      become: true
+      become_user: postgres
+      vars:
+        ansible_ssh_pipelining: true
+      community.postgresql.postgresql_privs:
+        type: sequence
+        database: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        privs: ALL
+        objs: ALL_IN_SCHEMA
+        schema: public
+
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted
