@@ -1,2 +1,2 @@
 # tf-pg-backend
-PostgreSQL backend for Terraform
+PostgreSQL backend for Terraform.
