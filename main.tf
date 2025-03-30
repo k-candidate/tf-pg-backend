@@ -3,7 +3,7 @@ provider "libvirt" {
 }
 
 module "tf-module-kvm-vm" {
-  source                  = "git@github.com:k-candidate/tf-module-kvm-vm.git?ref=v1.4.1"
+  source                  = "git@github.com:k-candidate/tf-module-kvm-vm.git?ref=v1.5.0"
   vm_name                 = var.vm_name
   network_name            = var.network_name
   image_source            = var.image_source
